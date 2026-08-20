@@ -50,6 +50,11 @@ FONT_CANDIDATES = [
     ("DejaVu", FONTS_DIR / "DejaVuSans.ttf", FONTS_DIR / "DejaVuSans-Bold.ttf"),
 ]
 
+# === PostgreSQL ===
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL не задан (нужен для PostgreSQL)")
+
 # === Платежи (опционально) ===
 PRODAMUS_SECRET_KEY = os.getenv("PRODAMUS_SECRET_KEY", "")
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "https://ваш-адрес.ngrok.io")

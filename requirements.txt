@@ -13,3 +13,4 @@ duckduckgo-search
 feedparser
 flask
 httpx
+psycopg2-binary
