@@ -97,7 +97,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
 
     system = get_system_prompt(standard, work_type) + "\n\n" + internet_context
 
-    # 2. Поиск источников (для докторских берём больше)
+    # 2. Поиск источников
     sources_count = 25 if work_type in ['candidate', 'doctor'] else 15
     notify_func(user_id, f"🔍 Ищу реальные источники литературы ({sources_count})...")
     real_sources = fetch_sources(topic, count=sources_count)
@@ -109,6 +109,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
     extra_sections = wt.get('extra_sections', [])
     subs_count = len(structure[0]['subsections']) if structure else 3
 
+    # Словарь для хранения сгенерированных частей (ключ – заголовок раздела)
     parts = {}
     context_summary = f"Тема: {topic}\nЦель: {goal}\n"
 
@@ -134,18 +135,18 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
 
     # ---- ГЛАВЫ ----
     for ch_idx, chapter in enumerate(structure, start=1):
-        ch_title = chapter['title']
-        if re.search(r'^глава\s+\d+', ch_title, re.I):
-            ch_title_formatted = re.sub(r'(\d+)', str(ch_idx), ch_title, count=1)
+        original_title = chapter['title']
+        if re.search(r'^глава\s+\d+', original_title, re.I):
+            ch_title_formatted = re.sub(r'(\d+)', str(ch_idx), original_title, count=1)
         else:
-            ch_title_formatted = f"Глава {ch_idx}. {ch_title}"
+            ch_title_formatted = f"Глава {ch_idx}. {original_title}"
 
         step += 1
         notify_func(user_id, f"📖 Генерирую {ch_title_formatted} ({step}/{total_steps})...")
 
         # Вступление к главе
         chapter_intro_prompt = (
-            f"Напиши вступительный абзац для главы '{ch_title}' (около {chap_intro_tokens//2} символов) "
+            f"Напиши вступительный абзац для главы '{original_title}' (около {chap_intro_tokens//2} символов) "
             f"для {work_type} на тему '{topic}'. Укажи, какие вопросы будут рассмотрены, и как они связаны с общей целью работы. "
             f"Опиши структуру главы и её место в исследовании."
         )
@@ -159,7 +160,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
         for sub_idx, sub_title in enumerate(chapter['subsections'], start=1):
             sub_prompt = (
                 f"Напиши подробное содержание подраздела '{sub_title}' (не менее {sub_max_tokens//2} символов) "
-                f"для главы '{ch_title}' в рамках {work_type} на тему '{topic}'. "
+                f"для главы '{original_title}' в рамках {work_type} на тему '{topic}'. "
                 f"Цель: {goal}. "
                 f"Раскрой тему максимально детально: приведи конкретные технологии, версии, числовые данные, примеры, расчёты, сравнительные таблицы. "
                 f"Используй не менее 5 источников из списка для цитирования: {sources_text[:500]}. "
@@ -174,6 +175,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
             check_cancelled_func()
             chapter_text += f"{ch_idx}.{sub_idx} {sub_title}\n{sub_content}\n\n"
 
+        # Сохраняем главу с точным заголовком
         parts[ch_title_formatted.upper()] = chapter_text
         context_summary += f"{ch_title_formatted}: {chapter_text[:300]}...\n"
 
@@ -228,8 +230,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
             if key not in parts:
                 parts[key] = f"Содержание главы {ch_idx} будет доработано позже. Пожалуйста, проверьте."
 
-    # ---- СБОРКА ИТОГОВОГО ТЕКСТА ----
-    result_text = ""
+    # ---- СБОРКА ИТОГОВОГО ТЕКСТА (ОБЯЗАТЕЛЬНЫЙ ПОРЯДОК) ----
     order = ["ВВЕДЕНИЕ"]
     for ch_idx in range(1, expected_chapters+1):
         ch_title = structure[ch_idx-1]['title']
@@ -240,10 +241,12 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
     for sec in extra_sections:
         order.append(sec.upper())
 
+    result_text = ""
     for heading in order:
         if heading in parts:
             result_text += f"=== {heading} ===\n{parts[heading]}\n\n"
         else:
+            # Если заголовка нет – создаём заглушку
             logger.warning(f"Раздел {heading} отсутствует, добавляем заглушку.")
             result_text += f"=== {heading} ===\n(Раздел не сгенерирован)\n\n"
 
@@ -277,6 +280,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
             markers_text += f"\n[ТАБЛИЦА {i}]"
         for i in range(1, figure_counter):
             markers_text += f"\n[РИСУНОК {i}]"
+        # Вставляем маркеры перед заключением
         if "=== ЗАКЛЮЧЕНИЕ ===" in result_text:
             result_text = result_text.replace("=== ЗАКЛЮЧЕНИЕ ===", markers_text + "\n\n=== ЗАКЛЮЧЕНИЕ ===")
         else:
@@ -295,7 +299,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
     try:
         h = Humanizer()
         result_text = h.humanize_diploma(result_text)
-        result_text = h.humanize(result_text)  # лёгкая полировка
+        result_text = h.humanize(result_text)
         result_text = re.sub(r'(?i)(кажется|отсутствует|текст для редактирования|ваш запрос|если вы отправите|я готов|уважаемый коллега)', '', result_text)
         logger.info("Диплом гуманизирован (двойной проход).")
     except Exception as e:
