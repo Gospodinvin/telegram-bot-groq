@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+temp/
+logs/
+data/
+*.db
+*.sqlite3
+*.ttf
+*.png
+*.jpg
+.DS_Store

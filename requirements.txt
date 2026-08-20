@@ -1,0 +1,15 @@
+python-telegram-bot
+python-dotenv
+groq
+faster-whisper
+reportlab
+python-docx
+python-pptx
+genanki
+Pillow
+matplotlib
+beautifulsoup4
+duckduckgo-search
+feedparser
+flask
+httpx
