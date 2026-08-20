@@ -109,7 +109,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
     extra_sections = wt.get('extra_sections', [])
     subs_count = len(structure[0]['subsections']) if structure else 3
 
-    # Словарь для хранения сгенерированных частей (ключ – заголовок раздела)
+    # Словарь для хранения сгенерированных частей
     parts = {}
     context_summary = f"Тема: {topic}\nЦель: {goal}\n"
 
@@ -136,13 +136,17 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
     # ---- ГЛАВЫ ----
     for ch_idx, chapter in enumerate(structure, start=1):
         original_title = chapter['title']
+        # Формируем заголовок для отображения
         if re.search(r'^глава\s+\d+', original_title, re.I):
-            ch_title_formatted = re.sub(r'(\d+)', str(ch_idx), original_title, count=1)
+            ch_title_display = re.sub(r'(\d+)', str(ch_idx), original_title, count=1)
         else:
-            ch_title_formatted = f"Глава {ch_idx}. {original_title}"
+            ch_title_display = f"Глава {ch_idx}. {original_title}"
+
+        # КЛЮЧ для сохранения и поиска — строго по шаблону
+        ch_key = f"ГЛАВА {ch_idx}. {original_title}".upper()
 
         step += 1
-        notify_func(user_id, f"📖 Генерирую {ch_title_formatted} ({step}/{total_steps})...")
+        notify_func(user_id, f"📖 Генерирую {ch_title_display} ({step}/{total_steps})...")
 
         # Вступление к главе
         chapter_intro_prompt = (
@@ -154,7 +158,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
         ch_intro = clean_markdown(ch_intro)
         check_cancelled_func()
 
-        chapter_text = f"{ch_title_formatted}\n{ch_intro}\n\n"
+        chapter_text = f"{ch_title_display}\n{ch_intro}\n\n"
 
         # Подразделы
         for sub_idx, sub_title in enumerate(chapter['subsections'], start=1):
@@ -175,9 +179,9 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
             check_cancelled_func()
             chapter_text += f"{ch_idx}.{sub_idx} {sub_title}\n{sub_content}\n\n"
 
-        # Сохраняем главу с точным заголовком
-        parts[ch_title_formatted.upper()] = chapter_text
-        context_summary += f"{ch_title_formatted}: {chapter_text[:300]}...\n"
+        # Сохраняем главу по строгому ключу
+        parts[ch_key] = chapter_text
+        context_summary += f"{ch_title_display}: {chapter_text[:300]}...\n"
 
     # ---- ДОПОЛНИТЕЛЬНЫЕ РАЗДЕЛЫ ----
     if extra_sections:
@@ -230,7 +234,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
             if key not in parts:
                 parts[key] = f"Содержание главы {ch_idx} будет доработано позже. Пожалуйста, проверьте."
 
-    # ---- СБОРКА ИТОГОВОГО ТЕКСТА (ОБЯЗАТЕЛЬНЫЙ ПОРЯДОК) ----
+    # ---- СБОРКА ИТОГОВОГО ТЕКСТА (СТРОГО ПО ПОРЯДКУ) ----
     order = ["ВВЕДЕНИЕ"]
     for ch_idx in range(1, expected_chapters+1):
         ch_title = structure[ch_idx-1]['title']
@@ -246,9 +250,8 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
         if heading in parts:
             result_text += f"=== {heading} ===\n{parts[heading]}\n\n"
         else:
-            # Если заголовка нет – создаём заглушку
-            logger.warning(f"Раздел {heading} отсутствует, добавляем заглушку.")
-            result_text += f"=== {heading} ===\n(Раздел не сгенерирован)\n\n"
+            logger.error(f"Раздел {heading} отсутствует даже после проверки! Добавляем экстренную заглушку.")
+            result_text += f"=== {heading} ===\n(Раздел не сгенерирован – проверьте логи)\n\n"
 
     # ---- ГЕНЕРАЦИЯ ТАБЛИЦ И ГРАФИКОВ ----
     notify_func(user_id, "📊 Генерирую таблицы и графики...")
@@ -280,7 +283,6 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
             markers_text += f"\n[ТАБЛИЦА {i}]"
         for i in range(1, figure_counter):
             markers_text += f"\n[РИСУНОК {i}]"
-        # Вставляем маркеры перед заключением
         if "=== ЗАКЛЮЧЕНИЕ ===" in result_text:
             result_text = result_text.replace("=== ЗАКЛЮЧЕНИЕ ===", markers_text + "\n\n=== ЗАКЛЮЧЕНИЕ ===")
         else:
@@ -294,8 +296,10 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
     estimated_pages = max(1, round(char_count / 1800))
     payload['volume_pages'] = estimated_pages
     logger.info(f"Расчётное количество страниц: {estimated_pages} (символов: {char_count})")
+    if estimated_pages < wt['min_pages']:
+        logger.warning(f"Объём ({estimated_pages} стр.) меньше минимального для {work_type} ({wt['min_pages']} стр.). Рекомендуется увеличить max_tokens или добавить подразделы.")
 
-    # ---- ГУМАНИЗАЦИЯ (усиленная) ----
+    # ---- ГУМАНИЗАЦИЯ ----
     try:
         h = Humanizer()
         result_text = h.humanize_diploma(result_text)
