@@ -1,12 +1,11 @@
+venv/
 __pycache__/
 *.pyc
+*.pyo
 .env
 temp/
 logs/
 data/
 *.db
 *.sqlite3
-*.ttf
-*.png
-*.jpg
 .DS_Store

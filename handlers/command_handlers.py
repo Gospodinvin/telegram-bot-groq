@@ -11,7 +11,7 @@ import db
 from utils.bot_utils import reply_and_save, save_bot_message, clear_bot_messages, check_subscription, get_payment_info
 from menus.menu_builder import get_main_menu_keyboard, get_back_button, get_subscription_menu, get_settings_menu
 from data_collector import DataCollector
-from ollama_client import call_ollama
+from llm_client import call_llm  # <--- ИЗМЕНЕНО: вместо ollama_client
 import constants
 
 logger = logging.getLogger(__name__)
@@ -124,9 +124,10 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt += "Свежие новости:\n"
         for news in collected["rss_news"]:
             prompt += f"- {news['title']} ({news['link']})\n"
-    result = call_ollama(
+    result = call_llm(  # <--- ИЗМЕНЕНО: call_ollama → call_llm
         prompt=prompt,
         system="Ты — ассистент. Отвечай на вопрос пользователя, используя только предоставленные данные. Будь кратким и точным. Если данных недостаточно, скажи об этом.",
+        model="fast",  # <--- ДОБАВЛЕН ПАРАМЕТР model
         num_predict=2000
     )
     sent = await update.message.reply_text(result[:4000])

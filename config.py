@@ -17,6 +17,7 @@ DB_PATH = DATA_DIR / "bot.db"
 for d in (FONTS_DIR, SAMPLES_DIR, TEMP_DIR, DATA_DIR, LOGS_DIR):
     d.mkdir(exist_ok=True)
 
+# === Telegram ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN не задан")
@@ -24,7 +25,7 @@ if not TELEGRAM_TOKEN:
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "@Gospodinvin")
 
-# === GROQ ===
+# === Groq API Keys (поддержка нескольких ключей) ===
 GROQ_API_KEYS = os.getenv("GROQ_API_KEYS", "").split(",")
 GROQ_API_KEYS = [k.strip() for k in GROQ_API_KEYS if k.strip()]
 # Если задан GROQ_API_KEY как одиночный, добавляем его
@@ -33,10 +34,19 @@ if not GROQ_API_KEYS and os.getenv("GROQ_API_KEY"):
 if not GROQ_API_KEYS:
     raise ValueError("GROQ_API_KEYS (или GROQ_API_KEY) не задан")
 
-# === Whisper (локальный, работает на CPU) ===
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")   # medium, large – тяжелее для CPU
+# === PostgreSQL (для Railway) ===
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    # Если нет DATABASE_URL, можно использовать SQLite (для локальной разработки)
+    # Но мы всё равно предупредим, чтобы не забыли
+    logging.warning("DATABASE_URL не задан, будет использоваться SQLite (данные не сохранятся при перезапуске)")
+    # В продакшене лучше явно требовать DATABASE_URL
+    # raise ValueError("DATABASE_URL не задан (нужен для PostgreSQL)")
+
+# === Whisper (локальное распознавание) ===
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
-WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE", "int8")  # int8 для CPU
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE", "int8")
 WHISPER_NUM_WORKERS = int(os.getenv("WHISPER_WORKERS", "1"))
 
 # === PDF шрифты ===
@@ -49,11 +59,6 @@ FONT_CANDIDATES = [
     ("DejaVuSerif", FONTS_DIR / "DejaVuSerif.ttf", FONTS_DIR / "DejaVuSerif-Bold.ttf"),
     ("DejaVu", FONTS_DIR / "DejaVuSans.ttf", FONTS_DIR / "DejaVuSans-Bold.ttf"),
 ]
-
-# === PostgreSQL ===
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL не задан (нужен для PostgreSQL)")
 
 # === Платежи (опционально) ===
 PRODAMUS_SECRET_KEY = os.getenv("PRODAMUS_SECRET_KEY", "")
@@ -140,4 +145,5 @@ ONE_TIME_PRICES = {
     'cheatsheet': {'rub': 80, 'stars': 115},
 }
 
+# === Импорт из gost_standards (оставляем в конце) ===
 from gost_standards import STANDARDS, WORK_TYPES

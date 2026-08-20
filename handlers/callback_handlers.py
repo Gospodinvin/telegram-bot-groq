@@ -97,8 +97,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("◀️ Назад", callback_data="back_to_offer_start")],
                     [InlineKeyboardButton("✅ Я ознакомлен и согласен", callback_data="agree_offer")]
-                ]),
-                parse_mode='Markdown'
+                ])
+                # parse_mode убран – текст содержит спецсимволы, которые могут сломать Markdown
             )
         except BadRequest:
             await query.message.reply_text(
@@ -106,8 +106,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("◀️ Назад", callback_data="back_to_offer_start")],
                     [InlineKeyboardButton("✅ Я ознакомлен и согласен", callback_data="agree_offer")]
-                ]),
-                parse_mode='Markdown'
+                ])
+                # parse_mode убран
             )
         return
 
@@ -165,7 +165,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
             )
             return
-        # Отправляем список платежей по одному с кнопками
         for p in pending:
             user_link = f"@{p['username']}" if p['username'] else f"ID: {p['user_id']}"
             text = f"💳 **Платёж #{p['id']}**\n"
@@ -182,7 +181,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_payment_{p['id']}")]
             ]
             await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode='Markdown')
-        # После списка – кнопка назад
         await query.edit_message_text(
             "⬆️ Список платежей выведен выше.",
             reply_markup=InlineKeyboardMarkup([
@@ -199,7 +197,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success = db.confirm_payment(payment_id)
         if success:
             await query.edit_message_text(f"✅ Платёж №{payment_id} подтверждён. Услуга активирована.")
-            # Отправить уведомление пользователю
             with db._conn() as conn:
                 row = conn.execute("SELECT user_id, service_type, plan, service_name FROM payments WHERE id=?", (payment_id,)).fetchone()
                 if row:

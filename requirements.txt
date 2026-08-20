@@ -9,7 +9,7 @@ genanki
 Pillow
 matplotlib
 beautifulsoup4
-duckduckgo-search
+ddgs
 feedparser
 flask
 httpx

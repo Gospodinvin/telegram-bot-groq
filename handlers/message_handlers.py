@@ -19,7 +19,7 @@ from utils.bot_utils import (
 )
 from utils.file_utils import safe_temp_file
 from menus.menu_builder import get_back_button, get_main_menu_keyboard
-from ollama_client import call_ollama
+from llm_client import call_llm  # <--- ИЗМЕНЕНО: вместо ollama_client
 from handlers.command_handlers import send_main_menu
 
 logger = logging.getLogger(__name__)
@@ -263,7 +263,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         prompt = f"Составь краткую шпаргалку по теме: {text}. Выдели ключевые определения, формулы, факты. Будь лаконичен, но информативен."
         system = "Ты — помощник-репетитор. Твоя задача — дать чёткую, структурированную выжимку по запросу. Используй списки и короткие абзацы. Не более 800 символов."
-        result = call_ollama(prompt, system, num_predict=1000)
+        result = call_llm(  # <--- ИЗМЕНЕНО: call_ollama → call_llm
+            prompt=prompt,
+            system=system,
+            model="fast",   # <--- ДОБАВЛЕН ПАРАМЕТР model
+            num_predict=1000
+        )
         sent = await update.message.reply_text(f"📝 Шпоргалка по теме «{text}»:\n\n{result[:4000]}")
         await save_bot_message(context, sent)
         await send_main_menu(update, context)
@@ -492,23 +497,20 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Загрузка пользовательского шрифта
     if context.user_data.get("waiting_font"):
         if doc.file_name and doc.file_name.endswith(".ttf"):
-            # Проверка размера
-            if doc.file_size and doc.file_size > 10 * 1024 * 1024:  # 10 МБ
+            if doc.file_size and doc.file_size > 10 * 1024 * 1024:
                 sent = await update.message.reply_text("❌ Файл шрифта слишком большой (макс. 10 МБ).")
                 await save_bot_message(context, sent)
                 return
-            # Проверка магических байт (упрощённо)
             file = await doc.get_file()
             with safe_temp_file(suffix='.ttf') as tmp_path:
                 await file.download_to_drive(tmp_path)
                 with open(tmp_path, 'rb') as f:
                     header = f.read(4)
-                    if header not in (b'\x00\x01\x00\x00', b'\x4F\x54\x54\x4F'):  # TrueType или OpenType
+                    if header not in (b'\x00\x01\x00\x00', b'\x4F\x54\x54\x4F'):
                         sent = await update.message.reply_text("❌ Похоже, это не TTF-шрифт.")
                         await save_bot_message(context, sent)
                         return
                 font_path = config.FONTS_DIR / f"user_{user_id}.ttf"
-                # Перемещаем файл в папку шрифтов
                 shutil.move(tmp_path, font_path)
             from handwriter_v2 import HandwriterV2
             hw = HandwriterV2()
@@ -609,7 +611,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await file.download_to_drive(tmp_path)
             try:
                 if doc.file_name.endswith(".txt"):
-                    # Пробуем разные кодировки
                     encodings = ['utf-8', 'windows-1251', 'cp1251', 'latin-1']
                     text_content = None
                     for enc in encodings:

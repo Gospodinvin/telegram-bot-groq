@@ -1,6 +1,7 @@
-# diploma_generator.py — генерация диплома (вынесено из task_queue)
+# diploma_generator.py — пошаговая генерация с адаптивным объёмом
 import re
 import logging
+import time
 from datetime import datetime
 
 from llm_client import call_llm
@@ -16,34 +17,23 @@ logger = logging.getLogger(__name__)
 _data_collector = DataCollector()
 
 def _clean_subsection_content(text: str) -> str:
-    """
-    Удаляет повторяющуюся нумерацию в начале абзацев вида "1.1 ", "1.1." и т.п.
-    Также удаляет строки, которые явно являются служебными или не относятся к теме.
-    """
     lines = text.split('\n')
     cleaned = []
     for line in lines:
-        # Убираем нумерацию вида "X.Y " или "X.Y." в начале строки
         line = re.sub(r'^\s*\d+\.\d+\s*\.?\s*', '', line)
-        # Убираем нумерацию вида "X. " (если осталась)
         line = re.sub(r'^\s*\d+\.\s*', '', line)
-        # Если строка содержит явно служебные фразы, пропускаем её
         if re.search(r'(кажется|отсутствует|текст для редактирования|ваш запрос|уважаемый коллега)', line, re.I):
             continue
         cleaned.append(line)
     return '\n'.join(cleaned)
 
 def _ensure_valid_structure(structure, work_type):
-    """
-    Проверяет, что структура валидна и содержит все необходимые главы с подразделами.
-    Если нет — создаёт структуру по умолчанию.
-    """
     wt = WORK_TYPES.get(work_type, WORK_TYPES['diploma'])
     required_chapters = wt['chapters']
     required_subs = wt['subsections_per_chapter']
 
     if not structure or not isinstance(structure, list) or len(structure) == 0:
-        logger.warning(f"Структура пуста или невалидна, создаём дефолтную для {work_type}")
+        logger.warning(f"Структура пуста, создаём дефолтную для {work_type}")
         return _create_default_structure(work_type, required_chapters, required_subs)
 
     valid = True
@@ -51,215 +41,219 @@ def _ensure_valid_structure(structure, work_type):
         if not ch.get('title') or not isinstance(ch.get('subsections'), list) or len(ch['subsections']) == 0:
             valid = False
             break
-
     if not valid:
-        logger.warning(f"Структура содержит пустые главы, создаём дефолтную для {work_type}")
         return _create_default_structure(work_type, required_chapters, required_subs)
 
     if len(structure) < required_chapters:
-        logger.info(f"Добавляем недостающие главы до {required_chapters}")
         for i in range(len(structure) + 1, required_chapters + 1):
-            chapter_title = f"Глава {i}"
-            subs = [f"Подраздел {i}.{j}" for j in range(1, required_subs + 1)]
-            structure.append({"title": chapter_title, "subsections": subs})
-
+            structure.append({"title": f"Глава {i}", "subsections": [f"{i}.{j}" for j in range(1, required_subs+1)]})
     for ch_idx, ch in enumerate(structure, start=1):
-        subs = ch.get('subsections', [])
-        if len(subs) < required_subs:
-            current = len(subs)
-            for j in range(current + 1, required_subs + 1):
-                subs.append(f"Подраздел {ch_idx}.{j}")
-            ch['subsections'] = subs
-            logger.info(f"Добавлены недостающие подразделы в главу {ch_idx}")
-
+        if len(ch['subsections']) < required_subs:
+            for j in range(len(ch['subsections'])+1, required_subs+1):
+                ch['subsections'].append(f"{ch_idx}.{j}")
     return structure
 
 def _create_default_structure(work_type, chapters_count, subs_per_chapter):
-    structure = []
-    for i in range(1, chapters_count + 1):
-        chapter_title = f"Глава {i}"
-        subs = [f"Подраздел {i}.{j}" for j in range(1, subs_per_chapter + 1)]
-        structure.append({"title": chapter_title, "subsections": subs})
-    return structure
+    return [{"title": f"Глава {i}", "subsections": [f"{i}.{j}" for j in range(1, subs_per_chapter+1)]} for i in range(1, chapters_count+1)]
 
 def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_func):
-    """
-    Генерирует полный текст диплома с таблицами, графиками и реальными источниками.
-    """
     work_type = payload['work_type']
     wt = WORK_TYPES.get(work_type, WORK_TYPES['diploma'])
-    num_predict = wt.get('num_predict', 16000)
     standard = payload['standard']
     topic = payload['topic']
     goal = payload['goal']
 
-    # Сбор данных из интернета
-    notify_func(user_id, "🔍 Собираю информацию по вашей теме из интернета...")
-    collected = _data_collector.collect(topic, max_pages=3)
-    internet_context = "Собранные данные из интернета:\n"
+    # Определяем параметры объёма в зависимости от типа работы
+    if work_type in ['candidate', 'doctor']:
+        sub_max_tokens = 6000
+        intro_max_tokens = 5000
+        conclusion_max_tokens = 5000
+        chap_intro_tokens = 1500
+        extra_tokens = 3500
+        lit_tokens = 3000
+        logger.info(f"Режим повышенного объёма для {work_type}")
+    else:
+        sub_max_tokens = 4000
+        intro_max_tokens = 3500
+        conclusion_max_tokens = 3500
+        chap_intro_tokens = 1200
+        extra_tokens = 2500
+        lit_tokens = 2000
+
+    # 1. Сбор данных из интернета (сокращённый)
+    notify_func(user_id, "🔍 Собираю информацию по теме...")
+    collected = _data_collector.collect(topic, max_pages=2)
+    internet_context = "Собранные данные:\n"
     for res in collected["search_results"]:
-        internet_context += f"- {res['title']} ({res['link']})\n"
+        internet_context += f"- {res['title']}\n"
         if res['snippet']:
             internet_context += f"  {res['snippet']}\n"
-    internet_context += "\nСодержание страниц:\n"
     for page in collected["pages_text"]:
-        internet_context += f"--- {page['url']} ---\n{page['text'][:1500]}\n\n"
+        internet_context += f"--- {page['url']} ---\n{page['text'][:600]}\n\n"
     if collected["rss_news"]:
-        internet_context += "Свежие новости по теме:\n"
-        for news in collected["rss_news"]:
-            internet_context += f"- {news['title']} ({news['link']})\n"
+        internet_context += "Новости:\n" + "\n".join([f"- {n['title']}" for n in collected["rss_news"]])
+    if len(internet_context) > 1000:
+        internet_context = internet_context[:1000] + "... (обрезано)"
 
-    base_system = get_system_prompt(standard, work_type)
-    system = base_system + "\n\n" + internet_context
+    system = get_system_prompt(standard, work_type) + "\n\n" + internet_context
 
-    # Проверка и восстановление структуры
-    raw_structure = payload.get('structure')
-    structure = _ensure_valid_structure(raw_structure, work_type)
-    payload['structure'] = structure
-
-    extra_sections = wt.get('extra_sections', [])
-    subsections_per_chapter = len(structure[0]['subsections']) if structure else 0
-
-    notify_func(user_id, "🔍 Ищу реальные источники литературы...")
-    real_sources = fetch_sources(topic, count=15)
+    # 2. Поиск источников (для докторских берём больше)
+    sources_count = 25 if work_type in ['candidate', 'doctor'] else 15
+    notify_func(user_id, f"🔍 Ищу реальные источники литературы ({sources_count})...")
+    real_sources = fetch_sources(topic, count=sources_count)
     sources_text = "\n".join([f"{i+1}. {s['author']}. {s['title']} // {s['journal']} ({s['year']})" for i, s in enumerate(real_sources)]) if real_sources else "Источники не найдены."
 
-    parts = []
-    context = f"Тема: {topic}\nЦель: {goal}\n"
-    if real_sources:
-        context += f"Доступные источники для цитирования:\n{sources_text}\n\n"
+    # 3. Подготовка структуры
+    structure = _ensure_valid_structure(payload.get('structure'), work_type)
+    payload['structure'] = structure
+    extra_sections = wt.get('extra_sections', [])
+    subs_count = len(structure[0]['subsections']) if structure else 3
 
-    total_steps = 1 + len(structure) * (1 + subsections_per_chapter) + 1 + len(extra_sections) + 1
+    parts = {}
+    context_summary = f"Тема: {topic}\nЦель: {goal}\n"
+
+    total_steps = 1 + len(structure) * (1 + subs_count) + 1 + len(extra_sections) + 1
     step = 0
-    intro = ""
 
-    # 1. Введение
+    # ---- ВВЕДЕНИЕ ----
     step += 1
     notify_func(user_id, f"📝 Генерирую введение ({step}/{total_steps})...")
     intro_prompt = (
-        f"Напиши ВВЕДЕНИЕ для {work_type} на тему \"{topic}\". "
-        f"Цель работы: {goal}. "
-        f"Используй структуру: актуальность, объект, предмет, цель, задачи, методы, научная новизна, практическая значимость. "
-        f"Объём введения должен быть не менее 3000 символов. "
-        f"Если есть реальные источники, ссылайся на них в тексте (например, [1], [2] или (Автор, год)). "
-        f"Список источников для цитирования:\n{sources_text}\n"
-        f"Начни сразу с текста. Не используй маркдаун и специальные символы."
+        f"Напиши развёрнутое ВВЕДЕНИЕ для {work_type} на тему '{topic}'. "
+        f"Цель: {goal}. "
+        f"Структура: актуальность (с обоснованием), объект, предмет, цель, задачи (5-7), методы, научная новизна, практическая значимость, структура работы. "
+        f"Объём: не менее {intro_max_tokens//2} символов. Приведи конкретные факты, статистику, цитаты из источников. "
+        f"Используй источники: {sources_text[:600]}. "
+        f"Пиши академическим языком, но избегай шаблонных фраз. Начни сразу с текста, без вступлений."
     )
-    intro = call_llm(intro_prompt, system, model="powerful", num_predict=num_predict)
+    intro = _call_with_retry(intro_prompt, system, "powerful", max_tokens=intro_max_tokens, max_retries=3)
     intro = clean_markdown(intro)
     check_cancelled_func()
-    parts.append(("ВВЕДЕНИЕ", intro))
-    context += f"Введение: {intro[:500]}...\n"
+    parts["ВВЕДЕНИЕ"] = intro
+    context_summary += f"Введение: {intro[:300]}...\n"
 
-    # 2. Главы
+    # ---- ГЛАВЫ ----
     for ch_idx, chapter in enumerate(structure, start=1):
-        original_title = chapter['title']
-        if re.search(r'^глава\s+\d+', original_title, re.I):
-            chapter_title = re.sub(r'(\d+)', str(ch_idx), original_title, count=1)
+        ch_title = chapter['title']
+        if re.search(r'^глава\s+\d+', ch_title, re.I):
+            ch_title_formatted = re.sub(r'(\d+)', str(ch_idx), ch_title, count=1)
         else:
-            chapter_title = f"Глава {ch_idx}. {original_title}"
-        subs = chapter['subsections']
+            ch_title_formatted = f"Глава {ch_idx}. {ch_title}"
 
         step += 1
-        notify_func(user_id, f"📖 Генерирую {chapter_title} ({step}/{total_steps})...")
-        chapter_intro_prompt = (
-            f"Напиши вступительный абзац для главы {ch_idx} '{original_title}' для {work_type} на тему '{topic}'. "
-            f"Кратко опиши, что будет рассмотрено в этой главе. "
-            f"Учитывай уже написанное содержание: {context[:1500]}"
-        )
-        chapter_intro = call_llm(chapter_intro_prompt, system, model="powerful", num_predict=num_predict // 2)
-        chapter_intro = clean_markdown(chapter_intro)
-        chapter_intro = re.sub(r'(?i)(если присмотреться|кажется|обратите внимание|давайте рассмотрим)', '', chapter_intro)
-        check_cancelled_func()
-        chapter_text = f"{chapter_title}\n{chapter_intro}\n\n"
+        notify_func(user_id, f"📖 Генерирую {ch_title_formatted} ({step}/{total_steps})...")
 
-        for sub_idx, sub_title in enumerate(subs, start=1):
+        # Вступление к главе
+        chapter_intro_prompt = (
+            f"Напиши вступительный абзац для главы '{ch_title}' (около {chap_intro_tokens//2} символов) "
+            f"для {work_type} на тему '{topic}'. Укажи, какие вопросы будут рассмотрены, и как они связаны с общей целью работы. "
+            f"Опиши структуру главы и её место в исследовании."
+        )
+        ch_intro = _call_with_retry(chapter_intro_prompt, system, "fast", max_tokens=chap_intro_tokens, max_retries=2)
+        ch_intro = clean_markdown(ch_intro)
+        check_cancelled_func()
+
+        chapter_text = f"{ch_title_formatted}\n{ch_intro}\n\n"
+
+        # Подразделы
+        for sub_idx, sub_title in enumerate(chapter['subsections'], start=1):
             sub_prompt = (
-                f"Напиши содержание подраздела '{sub_title}' для главы '{original_title}' "
-                f"в рамках {work_type} на тему '{topic}'. "
-                f"Цель работы: {goal}. "
-                f"Учитывай контекст: {context[:1500]}\n"
-                f"Используй реальные источники для подтверждения фактов и цитирования. "
-                f"Список источников:\n{sources_text}\n"
-                f"Требования: конкретные технологии, версии, числовые данные, примеры, расчёты, сравнительные таблицы. "
-                f"Объём подраздела должен составлять не менее 4000 символов. "
-                f"Раскрывай тему подробно, с пояснениями и аргументацией.\n"
-                f"ВАЖНО: Не нумеруй подразделы в начале текста, не пиши цифры с точкой. Мы добавим нумерацию сами. "
-                f"Просто текст без маркдауна."
+                f"Напиши подробное содержание подраздела '{sub_title}' (не менее {sub_max_tokens//2} символов) "
+                f"для главы '{ch_title}' в рамках {work_type} на тему '{topic}'. "
+                f"Цель: {goal}. "
+                f"Раскрой тему максимально детально: приведи конкретные технологии, версии, числовые данные, примеры, расчёты, сравнительные таблицы. "
+                f"Используй не менее 5 источников из списка для цитирования: {sources_text[:500]}. "
+                f"Проанализируй различные точки зрения, сделай собственные выводы. "
+                f"Избегай общих фраз, пиши содержательно, с глубокой аргументацией. "
+                f"Оформи текст как научный, но без шаблонных оборотов. "
+                f"Начни сразу с содержания, без повторения названия подраздела."
             )
-            sub_content = call_llm(sub_prompt, system, model="powerful", num_predict=num_predict)
+            sub_content = _call_with_retry(sub_prompt, system, "fast", max_tokens=sub_max_tokens, max_retries=3)
             sub_content = clean_markdown(sub_content)
             sub_content = _clean_subsection_content(sub_content)
             check_cancelled_func()
             chapter_text += f"{ch_idx}.{sub_idx} {sub_title}\n{sub_content}\n\n"
 
-        parts.append((chapter_title.upper(), chapter_text))
-        context += f"{chapter_title}: {chapter_text[:500]}...\n"
+        parts[ch_title_formatted.upper()] = chapter_text
+        context_summary += f"{ch_title_formatted}: {chapter_text[:300]}...\n"
 
-    # 3. Дополнительные разделы (если есть)
+    # ---- ДОПОЛНИТЕЛЬНЫЕ РАЗДЕЛЫ ----
     if extra_sections:
         step += 1
         notify_func(user_id, f"📋 Генерирую дополнительные разделы ({step}/{total_steps})...")
         for sec_name in extra_sections:
-            prompt = get_extra_section_prompt(sec_name, topic, goal, context)
-            content = call_llm(prompt, None, model="powerful", num_predict=num_predict // 2)
+            prompt = get_extra_section_prompt(sec_name, topic, goal, context_summary)
+            content = _call_with_retry(prompt, None, "fast", max_tokens=extra_tokens, max_retries=2)
             content = clean_markdown(content)
             check_cancelled_func()
-            parts.append((sec_name.upper(), content))
+            parts[sec_name.upper()] = content
 
-    # 4. Заключение
+    # ---- ЗАКЛЮЧЕНИЕ ----
     step += 1
     notify_func(user_id, f"📝 Генерирую заключение ({step}/{total_steps})...")
     conclusion_prompt = (
-        f"Напиши ЗАКЛЮЧЕНИЕ для {work_type} на тему \"{topic}\". "
-        f"Цель работы: {goal}. "
-        f"Кратко подведи итог по каждой задаче, оценка достижения цели, направления для дальнейшего развития. "
-        f"Объём заключения должен быть не менее 2000 символов. "
-        f"Не повторяй текст предыдущих разделов, дай обобщающие выводы. "
-        f"Не используй служебные фразы, не обращайся к пользователю, пиши строго научный текст."
+        f"Напиши развёрнутое ЗАКЛЮЧЕНИЕ для {work_type} на тему '{topic}'. "
+        f"Цель: {goal}. "
+        f"Подведи итоги по каждой задаче, оцени достижение цели, сформулируй основные выводы и практические рекомендации. "
+        f"Укажи направления для дальнейшего развития. "
+        f"Объём: не менее {conclusion_max_tokens//2} символов. "
+        f"Используй ссылки на собственные результаты, не повторяй текст предыдущих разделов."
     )
-    conclusion = call_llm(conclusion_prompt, system, model="powerful", num_predict=num_predict // 2)
+    conclusion = _call_with_retry(conclusion_prompt, system, "fast", max_tokens=conclusion_max_tokens, max_retries=2)
     conclusion = clean_markdown(conclusion)
-    conclusion = re.sub(r'(?i)(кажется|отсутствует|текст для редактирования|ваш запрос|если вы отправите|я готов|уважаемый коллега)', '', conclusion)
     check_cancelled_func()
-    parts.append(("ЗАКЛЮЧЕНИЕ", conclusion))
+    parts["ЗАКЛЮЧЕНИЕ"] = conclusion
 
-    # 5. Список литературы
+    # ---- СПИСОК ЛИТЕРАТУРЫ ----
     step += 1
     notify_func(user_id, f"📚 Генерирую список литературы ({step}/{total_steps})...")
     if real_sources:
         bibliography = format_bibliography(real_sources, standard)
     else:
         from gost_standards import get_bibliography_prompt
-        lit_prompt = get_bibliography_prompt(standard, min_sources=15) + f"\n\nТема: {topic}\nИсточники: {payload.get('sources', '')}"
-        bibliography = call_llm(lit_prompt, None, model="fast", num_predict=num_predict // 2)
+        lit_prompt = get_bibliography_prompt(standard, min_sources=sources_count) + f"\n\nТема: {topic}\nИсточники: {payload.get('sources', '')}"
+        bibliography = _call_with_retry(lit_prompt, None, "fast", max_tokens=lit_tokens, max_retries=2)
     bibliography = clean_markdown(bibliography)
     check_cancelled_func()
-    parts.append(("СПИСОК ЛИТЕРАТУРЫ", bibliography))
+    parts["СПИСОК ЛИТЕРАТУРЫ"] = bibliography
 
-    # === ИСПРАВЛЕНИЕ ПРОПАДАНИЯ ГЛАВ ===
+    # ---- ПРОВЕРКА НАЛИЧИЯ ВСЕХ ГЛАВ ----
     expected_chapters = len(structure)
-    actual_chapters = len([p for p in parts if any(x in p[0].upper() for x in ['ГЛАВА', 'ГЛАВ'])])
-    if actual_chapters < expected_chapters:
-        logger.warning(f"Сгенерировано только {actual_chapters} глав из {expected_chapters}, добавляем недостающие")
-        for ch_idx in range(actual_chapters + 1, expected_chapters + 1):
-            ch_title = structure[ch_idx-1]['title'] if ch_idx-1 < len(structure) else f"Глава {ch_idx}"
-            parts.append((f"ГЛАВА {ch_idx}. {ch_title}",
-                          f"Содержание главы {ch_idx} не было сгенерировано. Пожалуйста, проверьте."))
-    # ==========================================
+    actual_chapter_keys = [k for k in parts.keys() if any(x in k.upper() for x in ['ГЛАВА', 'ГЛАВ'])]
+    if len(actual_chapter_keys) < expected_chapters:
+        logger.warning(f"Сгенерировано только {len(actual_chapter_keys)} глав из {expected_chapters}, добавляем недостающие.")
+        for ch_idx in range(1, expected_chapters + 1):
+            ch_title = structure[ch_idx-1]['title']
+            key = f"ГЛАВА {ch_idx}. {ch_title}".upper()
+            if key not in parts:
+                parts[key] = f"Содержание главы {ch_idx} будет доработано позже. Пожалуйста, проверьте."
 
-    # Собираем итоговый текст
+    # ---- СБОРКА ИТОГОВОГО ТЕКСТА ----
     result_text = ""
-    for heading, body in parts:
-        result_text += f"=== {heading} ===\n{body}\n\n"
+    order = ["ВВЕДЕНИЕ"]
+    for ch_idx in range(1, expected_chapters+1):
+        ch_title = structure[ch_idx-1]['title']
+        key = f"ГЛАВА {ch_idx}. {ch_title}".upper()
+        order.append(key)
+    order.append("ЗАКЛЮЧЕНИЕ")
+    order.append("СПИСОК ЛИТЕРАТУРЫ")
+    for sec in extra_sections:
+        order.append(sec.upper())
 
-    # Генерация таблиц и графиков
+    for heading in order:
+        if heading in parts:
+            result_text += f"=== {heading} ===\n{parts[heading]}\n\n"
+        else:
+            logger.warning(f"Раздел {heading} отсутствует, добавляем заглушку.")
+            result_text += f"=== {heading} ===\n(Раздел не сгенерирован)\n\n"
+
+    # ---- ГЕНЕРАЦИЯ ТАБЛИЦ И ГРАФИКОВ ----
     notify_func(user_id, "📊 Генерирую таблицы и графики...")
     images = {}
     table_counter = 1
     figure_counter = 1
 
-    table_data_list = generate_table_data(result_text, topic, context, num_tables=2)
+    table_data_list = generate_table_data(result_text, topic, context_summary, num_tables=3)
     for td in table_data_list:
         try:
             img_bytes = render_table_as_image(td)
@@ -289,18 +283,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
             result_text += markers_text
         payload['images'] = images
 
-    result_text = clean_markdown(result_text)
-
-    # Проверка наличия введения
-    if "=== ВВЕДЕНИЕ ===" not in result_text:
-        logger.warning("Введение отсутствует в финальном тексте, вставляем заново")
-        result_text = f"=== ВВЕДЕНИЕ ===\n{intro}\n\n" + result_text
-    else:
-        intro_match = re.search(r'=== ВВЕДЕНИЕ ===\n(.*?)(?=\n===|$)', result_text, re.DOTALL)
-        if intro_match and len(intro_match.group(1).strip()) < 100:
-            result_text = re.sub(r'=== ВВЕДЕНИЕ ===\n.*?(?=\n===|$)', f'=== ВВЕДЕНИЕ ===\n{intro}', result_text, flags=re.DOTALL)
-
-    # Расчёт страниц
+    # ---- ОЦЕНКА ОБЪЁМА ----
     clean_text = re.sub(r'\[ТАБЛИЦА\s*\d+\]', '', result_text)
     clean_text = re.sub(r'\[(РИСУНОК|ГРАФИК)\s*\d+\]', '', clean_text)
     char_count = len(clean_text)
@@ -308,13 +291,48 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
     payload['volume_pages'] = estimated_pages
     logger.info(f"Расчётное количество страниц: {estimated_pages} (символов: {char_count})")
 
-    # Гуманизация
+    # ---- ГУМАНИЗАЦИЯ (усиленная) ----
     try:
         h = Humanizer()
         result_text = h.humanize_diploma(result_text)
+        result_text = h.humanize(result_text)  # лёгкая полировка
         result_text = re.sub(r'(?i)(кажется|отсутствует|текст для редактирования|ваш запрос|если вы отправите|я готов|уважаемый коллега)', '', result_text)
-        logger.info("Диплом гуманизирован и очищен.")
+        logger.info("Диплом гуманизирован (двойной проход).")
     except Exception as e:
-        logger.error(f"Ошибка гуманизации диплома: {e}", exc_info=True)
+        logger.error(f"Гуманизация не удалась: {e}")
 
     return result_text
+
+
+def _call_with_retry(prompt, system, model, max_tokens, max_retries=3):
+    """Вызывает LLM с уменьшением max_tokens при 413 и паузами при 429."""
+    current_tokens = max_tokens
+    for attempt in range(max_retries):
+        try:
+            return call_llm(
+                prompt=prompt,
+                system=system,
+                model=model,
+                num_predict=current_tokens,
+                temperature=0.85,
+                top_p=0.9,
+                retries=2
+            )
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "payload too large" in error_msg or "413" in error_msg:
+                current_tokens = max(500, current_tokens // 2)
+                logger.warning(f"413 – уменьшаем max_tokens до {current_tokens}, повторяем...")
+                time.sleep(1)
+                continue
+            elif "rate_limit" in error_msg or "429" in error_msg:
+                wait = 5 * (attempt + 1) + 2
+                logger.warning(f"429 – ждём {wait} секунд и повторяем...")
+                time.sleep(wait)
+                continue
+            else:
+                logger.warning(f"Ошибка (попытка {attempt+1}): {e}")
+                time.sleep(2)
+                continue
+    logger.error(f"Не удалось сгенерировать раздел после {max_retries} попыток.")
+    return f"[ОШИБКА ГЕНЕРАЦИИ – попробуйте позже]"

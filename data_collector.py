@@ -4,12 +4,11 @@ import feedparser
 import logging
 import time
 from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
+from ddgs import DDGS  # вместо duckduckgo_search
 import config
 
 logger = logging.getLogger(__name__)
 
-# Список RSS-лент для резервирования (если одна упадёт, попробуем следующую)
 RSS_FEEDS = [
     "https://news.yandex.ru/index.rss",
     "https://lenta.ru/rss",
@@ -17,14 +16,11 @@ RSS_FEEDS = [
     "https://www.interfax.ru/rss.asp",
 ]
 
-
 class DataCollector:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
         self.timeout = config.DATA_COLLECTOR_TIMEOUT
-        # Отключаем проверку SSL для проблемных хостов (опционально, но может быть небезопасно)
-        # self.session.verify = False
 
     def search(self, query: str, num: int = 5):
         try:
@@ -59,9 +55,7 @@ class DataCollector:
             return ""
 
     def get_rss_news(self, feed_url: str, limit: int = 5):
-        """Пытается получить новости из RSS, при ошибке возвращает пустой список."""
         try:
-            # Увеличиваем таймаут и добавляем повторные попытки
             for attempt in range(2):
                 try:
                     resp = self.session.get(feed_url, timeout=self.timeout)
@@ -77,10 +71,10 @@ class DataCollector:
                     return entries
                 except requests.exceptions.SSLError as e:
                     logger.warning(f"SSL ошибка при запросе {feed_url}, попытка {attempt+1}: {e}")
-                    time.sleep(1)  # небольшая пауза перед повторной попыткой
+                    time.sleep(1)
                 except Exception as e:
                     logger.warning(f"Ошибка RSS для {feed_url}: {e}")
-                    break  # другие ошибки не повторяем
+                    break
             return []
         except Exception as e:
             logger.error(f"RSS error for {feed_url}: {e}", exc_info=True)
@@ -93,11 +87,9 @@ class DataCollector:
             "pages_text": [],
             "rss_news": []
         }
-        # Поиск
         search_res = self.search(query, num=max_pages)
         context["search_results"] = search_res
 
-        # Скрапинг страниц
         for res in search_res[:max_pages]:
             link = res.get("link")
             if link:
@@ -105,7 +97,6 @@ class DataCollector:
                 if text:
                     context["pages_text"].append({"url": link, "text": text[:3000]})
 
-        # RSS – пробуем по очереди несколько лент, пока одна не даст результат
         for feed in RSS_FEEDS:
             news = self.get_rss_news(feed, limit=3)
             if news:
