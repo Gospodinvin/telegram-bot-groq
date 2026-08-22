@@ -1,9 +1,10 @@
-# db.py — PostgreSQL с пулом соединений
+# db.py — PostgreSQL с пулом соединений и retry-логикой
 import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 import json
 import logging
+import time
 from datetime import datetime, timedelta
 import threading
 import config
@@ -14,34 +15,69 @@ logger = logging.getLogger(__name__)
 _pool = None
 _lock = threading.Lock()
 
-def get_pool():
+def get_pool(max_retries=10, delay=2):
+    """Создаёт пул соединений с повторными попытками, если БД ещё не готова."""
     global _pool
-    if _pool is None:
-        with _lock:
-            if _pool is None:
-                try:
-                    _pool = psycopg2.pool.SimpleConnectionPool(
-                        1, 10,  # минимум 1, максимум 10 соединений
-                        dsn=config.DATABASE_URL
-                    )
-                    logger.info("PostgreSQL пул соединений создан")
-                except Exception as e:
+    if _pool is not None:
+        return _pool
+
+    with _lock:
+        if _pool is not None:
+            return _pool
+
+        last_exception = None
+        for attempt in range(max_retries):
+            try:
+                _pool = psycopg2.pool.SimpleConnectionPool(
+                    1, 10,
+                    dsn=config.DATABASE_URL
+                )
+                logger.info("PostgreSQL пул соединений создан")
+                return _pool
+            except psycopg2.OperationalError as e:
+                if "database system is starting up" in str(e):
+                    wait = delay * (attempt + 1)
+                    logger.warning(f"БД ещё запускается, ждём {wait} сек... (попытка {attempt+1}/{max_retries})")
+                    time.sleep(wait)
+                    last_exception = e
+                    continue
+                else:
                     logger.error(f"Ошибка создания пула PostgreSQL: {e}")
                     raise
-    return _pool
+            except Exception as e:
+                logger.error(f"Неизвестная ошибка: {e}")
+                raise
+
+        logger.critical(f"Не удалось подключиться к БД после {max_retries} попыток")
+        raise last_exception or RuntimeError("Не удалось подключиться к PostgreSQL")
 
 def _conn():
-    """Возвращает соединение из пула (для совместимости со старым кодом)"""
+    """Возвращает соединение из пула."""
     pool = get_pool()
     return pool.getconn()
 
 def _release_conn(conn):
-    """Возвращает соединение в пул"""
+    """Возвращает соединение в пул."""
     pool = get_pool()
     pool.putconn(conn)
 
-def init_db():
-    conn = _conn()
+def init_db(max_retries=10, delay=2):
+    """Инициализация таблиц с повторными попытками."""
+    for attempt in range(max_retries):
+        try:
+            conn = _conn()
+            break
+        except psycopg2.OperationalError as e:
+            if "database system is starting up" in str(e):
+                wait = delay * (attempt + 1)
+                logger.warning(f"БД ещё запускается, ждём {wait} сек... (попытка {attempt+1}/{max_retries})")
+                time.sleep(wait)
+                continue
+            else:
+                raise
+    else:
+        raise RuntimeError("Не удалось инициализировать БД после нескольких попыток")
+
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -442,5 +478,5 @@ def cleanup_old_records(days: int = 30):
     finally:
         _release_conn(conn)
 
-# Инициализация при импорте
+# Инициализация при импорте (с retry)
 init_db()

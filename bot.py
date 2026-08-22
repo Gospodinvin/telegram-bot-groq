@@ -138,7 +138,7 @@ def main():
     # Очередь задач
     task_queue = TaskQueue(
         bot=application.bot,
-        loop=asyncio.get_event_loop(),
+        loop=asyncio.new_event_loop(),
         result_callback=on_task_complete,
     )
     task_queue.start()
