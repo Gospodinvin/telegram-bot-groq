@@ -149,6 +149,12 @@ def main():
     # Передаём очередь в дипломный диалог (если нужно)
     set_task_queue(task_queue)
 
+    try:
+        asyncio.run(application.bot.delete_webhook())
+        logger.info("Вебхук удалён")
+    except Exception as e:
+        logger.warning(f"Не удалось удалить вебхук: {e}")
+
     logger.info("🚀 Бот запущен")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
