@@ -97,6 +97,9 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
 
     system = get_system_prompt(standard, work_type) + "\n\n" + internet_context
 
+    # ===== ВАЖНОЕ ДОПОЛНЕНИЕ: принудительный русский язык =====
+    system += "\n\nОТВЕЧАЙ ТОЛЬКО НА РУССКОМ ЯЗЫКЕ. НИ СЛОВА НА АНГЛИЙСКОМ, КРОМЕ ОБЩЕПРИНЯТЫХ ТЕРМИНОВ (например, API, CPU). ВЕСЬ ТЕКСТ ДОЛЖЕН БЫТЬ НА РУССКОМ."
+
     # 2. Поиск источников
     sources_count = 25 if work_type in ['candidate', 'doctor'] else 15
     notify_func(user_id, f"🔍 Ищу реальные источники литературы ({sources_count})...")
@@ -125,7 +128,8 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
         f"Структура: актуальность (с обоснованием), объект, предмет, цель, задачи (5-7), методы, научная новизна, практическая значимость, структура работы. "
         f"Объём: не менее {intro_max_tokens//2} символов. Приведи конкретные факты, статистику, цитаты из источников. "
         f"Используй источники: {sources_text[:600]}. "
-        f"Пиши академическим языком, но избегай шаблонных фраз. Начни сразу с текста, без вступлений."
+        f"Пиши академическим языком, но избегай шаблонных фраз. Начни сразу с текста, без вступлений. "
+        f"ВСЕГДА ОТВЕЧАЙ НА РУССКОМ ЯЗЫКЕ."
     )
     intro = _call_with_retry(intro_prompt, system, "powerful", max_tokens=intro_max_tokens, max_retries=3)
     intro = clean_markdown(intro)
@@ -136,13 +140,11 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
     # ---- ГЛАВЫ ----
     for ch_idx, chapter in enumerate(structure, start=1):
         original_title = chapter['title']
-        # Формируем заголовок для отображения
         if re.search(r'^глава\s+\d+', original_title, re.I):
             ch_title_display = re.sub(r'(\d+)', str(ch_idx), original_title, count=1)
         else:
             ch_title_display = f"Глава {ch_idx}. {original_title}"
 
-        # КЛЮЧ для сохранения и поиска — строго по шаблону
         ch_key = f"ГЛАВА {ch_idx}. {original_title}".upper()
 
         step += 1
@@ -152,7 +154,8 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
         chapter_intro_prompt = (
             f"Напиши вступительный абзац для главы '{original_title}' (около {chap_intro_tokens//2} символов) "
             f"для {work_type} на тему '{topic}'. Укажи, какие вопросы будут рассмотрены, и как они связаны с общей целью работы. "
-            f"Опиши структуру главы и её место в исследовании."
+            f"Опиши структуру главы и её место в исследовании. "
+            f"ОТВЕЧАЙ ТОЛЬКО НА РУССКОМ ЯЗЫКЕ."
         )
         ch_intro = _call_with_retry(chapter_intro_prompt, system, "fast", max_tokens=chap_intro_tokens, max_retries=2)
         ch_intro = clean_markdown(ch_intro)
@@ -171,7 +174,8 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
                 f"Проанализируй различные точки зрения, сделай собственные выводы. "
                 f"Избегай общих фраз, пиши содержательно, с глубокой аргументацией. "
                 f"Оформи текст как научный, но без шаблонных оборотов. "
-                f"Начни сразу с содержания, без повторения названия подраздела."
+                f"Начни сразу с содержания, без повторения названия подраздела. "
+                f"ВСЕГДА ОТВЕЧАЙ НА РУССКОМ ЯЗЫКЕ."
             )
             sub_content = _call_with_retry(sub_prompt, system, "fast", max_tokens=sub_max_tokens, max_retries=3)
             sub_content = clean_markdown(sub_content)
@@ -179,7 +183,6 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
             check_cancelled_func()
             chapter_text += f"{ch_idx}.{sub_idx} {sub_title}\n{sub_content}\n\n"
 
-        # Сохраняем главу по строгому ключу
         parts[ch_key] = chapter_text
         context_summary += f"{ch_title_display}: {chapter_text[:300]}...\n"
 
@@ -189,6 +192,8 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
         notify_func(user_id, f"📋 Генерирую дополнительные разделы ({step}/{total_steps})...")
         for sec_name in extra_sections:
             prompt = get_extra_section_prompt(sec_name, topic, goal, context_summary)
+            # Добавляем требование русского языка
+            prompt += "\n\nОТВЕЧАЙ ТОЛЬКО НА РУССКОМ ЯЗЫКЕ."
             content = _call_with_retry(prompt, None, "fast", max_tokens=extra_tokens, max_retries=2)
             content = clean_markdown(content)
             check_cancelled_func()
@@ -203,7 +208,8 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
         f"Подведи итоги по каждой задаче, оцени достижение цели, сформулируй основные выводы и практические рекомендации. "
         f"Укажи направления для дальнейшего развития. "
         f"Объём: не менее {conclusion_max_tokens//2} символов. "
-        f"Используй ссылки на собственные результаты, не повторяй текст предыдущих разделов."
+        f"Используй ссылки на собственные результаты, не повторяй текст предыдущих разделов. "
+        f"ВСЕГДА ОТВЕЧАЙ НА РУССКОМ ЯЗЫКЕ."
     )
     conclusion = _call_with_retry(conclusion_prompt, system, "fast", max_tokens=conclusion_max_tokens, max_retries=2)
     conclusion = clean_markdown(conclusion)
@@ -218,6 +224,7 @@ def generate_diploma(payload: dict, user_id: int, notify_func, check_cancelled_f
     else:
         from gost_standards import get_bibliography_prompt
         lit_prompt = get_bibliography_prompt(standard, min_sources=sources_count) + f"\n\nТема: {topic}\nИсточники: {payload.get('sources', '')}"
+        lit_prompt += "\n\nОТВЕЧАЙ ТОЛЬКО НА РУССКОМ ЯЗЫКЕ."
         bibliography = _call_with_retry(lit_prompt, None, "fast", max_tokens=lit_tokens, max_retries=2)
     bibliography = clean_markdown(bibliography)
     check_cancelled_func()
