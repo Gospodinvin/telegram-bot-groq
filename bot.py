@@ -135,11 +135,11 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(MessageHandler(filters.Document.ALL | filters.AUDIO | filters.VIDEO, handle_document))
 
-    # Очередь задач
+    # Очередь задач – БЕЗ ПЕРЕДАЧИ LOOP (исправлено)
     task_queue = TaskQueue(
         bot=application.bot,
-        loop=asyncio.new_event_loop(),
         result_callback=on_task_complete,
+        # loop больше не передаём, TaskQueue создаст свой собственный
     )
     task_queue.start()
 
@@ -148,12 +148,6 @@ def main():
 
     # Передаём очередь в дипломный диалог (если нужно)
     set_task_queue(task_queue)
-
-    try:
-        asyncio.run(application.bot.delete_webhook())
-        logger.info("Вебхук удалён")
-    except Exception as e:
-        logger.warning(f"Не удалось удалить вебхук: {e}")
 
     logger.info("🚀 Бот запущен")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

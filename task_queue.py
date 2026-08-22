@@ -30,6 +30,11 @@ class TaskQueue:
         self._current_task_id = None
         self._cancel_requested = False
 
+        # Если внешний цикл не передан – создаём свой собственный
+        if self.loop is None:
+            self.loop = asyncio.new_event_loop()
+            logger.info("TaskQueue: создан собственный event loop")
+
     def start(self):
         self._running = True
         reset_running_tasks()
@@ -39,6 +44,10 @@ class TaskQueue:
     def stop(self):
         self._running = False
         self._thread.join(timeout=constants.WORKER_SHUTDOWN_TIMEOUT)
+        # Закрываем цикл после завершения воркера
+        if self.loop and not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self.loop.close()
         logger.info("TaskQueue: воркер остановлен")
 
     def submit(self, user_id: int, task_type: str, payload: dict) -> int:
@@ -67,6 +76,10 @@ class TaskQueue:
         return True
 
     def _worker(self):
+        # Устанавливаем созданный цикл для этого потока
+        if self.loop:
+            asyncio.set_event_loop(self.loop)
+
         while self._running:
             try:
                 task = get_pending_task()
@@ -102,6 +115,7 @@ class TaskQueue:
             update_task_status(tid, "done")
             self._notify(uid, f"✅ Задача №{tid} выполнена!")
             if self.result_callback:
+                # Используем наш цикл для вызова колбэка
                 asyncio.run_coroutine_threadsafe(
                     self.result_callback(uid, ttype, result, payload),
                     self.loop
