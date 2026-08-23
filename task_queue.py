@@ -33,7 +33,11 @@ class TaskQueue:
         # Если внешний цикл не передан – создаём свой собственный
         if self.loop is None:
             self.loop = asyncio.new_event_loop()
+            self._owns_loop = True
             logger.info("TaskQueue: создан собственный event loop")
+        else:
+            self._owns_loop = False
+            logger.info("TaskQueue: использует внешний event loop")
 
     def start(self):
         self._running = True
@@ -44,8 +48,8 @@ class TaskQueue:
     def stop(self):
         self._running = False
         self._thread.join(timeout=constants.WORKER_SHUTDOWN_TIMEOUT)
-        # Закрываем цикл после завершения воркера
-        if self.loop and not self.loop.is_closed():
+        # Закрываем цикл ТОЛЬКО если он наш собственный
+        if self._owns_loop and self.loop and not self.loop.is_closed():
             self.loop.call_soon_threadsafe(self.loop.stop)
             self.loop.close()
         logger.info("TaskQueue: воркер остановлен")
@@ -76,8 +80,8 @@ class TaskQueue:
         return True
 
     def _worker(self):
-        # Устанавливаем созданный цикл для этого потока
-        if self.loop:
+        # Устанавливаем созданный цикл для этого потока (если он наш)
+        if self._owns_loop and self.loop:
             asyncio.set_event_loop(self.loop)
 
         while self._running:
@@ -169,7 +173,6 @@ class TaskQueue:
             return clean_markdown(raw)
 
         if ttype == "diploma_full":
-            # Генерация диплома вынесена в отдельную функцию
             from diploma_generator import generate_diploma
             return generate_diploma(payload, user_id, self._notify, check_cancelled)
 

@@ -135,11 +135,13 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(MessageHandler(filters.Document.ALL | filters.AUDIO | filters.VIDEO, handle_document))
 
-    # Очередь задач – БЕЗ ПЕРЕДАЧИ LOOP (исправлено)
+    # ===== ИСПРАВЛЕНИЕ: получаем главный цикл событий =====
+    loop = asyncio.get_event_loop()
+
     task_queue = TaskQueue(
         bot=application.bot,
+        loop=loop,                           # ← передаём правильный цикл
         result_callback=on_task_complete,
-        # loop больше не передаём, TaskQueue создаст свой собственный
     )
     task_queue.start()
 
